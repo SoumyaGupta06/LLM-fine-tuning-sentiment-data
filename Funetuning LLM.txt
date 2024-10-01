@@ -1,0 +1,261 @@
+# data preperation
+
+
+import pandas as pd
+import datasets
+from pprint import pprint
+from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained("EleutherAI/pythia-70m")
+
+#data preparation
+#filename = "lamini_docs.jsonl"
+#instruction_dataset_df = pd.read_json(filename, lines=True)
+#examples = instruction_dataset_df.to_dict()
+
+taylor_swift_dataset = "lamini/taylor_swift"
+dataset_swiftie = datasets.load_dataset(taylor_swift_dataset)
+print(dataset_swiftie["train"][1])
+
+
+
+examples = dataset_swiftie["train"]
+text = ""
+if "question" in examples and "answer" in examples:
+  text = examples["question"][0] + examples["answer"][0]
+elif "instruction" in examples and "response" in examples:
+  text = examples["instruction"][0] + examples["response"][0]
+elif "input" in examples and "output" in examples:
+  text = examples["input"][0] + examples["output"][0]
+else:
+  text = examples["text"][0]
+
+prompt_template = """### Question:
+{question}
+
+### Answer:"""
+
+num_examples = len(examples["question"])
+finetuning_dataset = []
+for i in range(num_examples):
+  question = examples["question"][i]
+  answer = examples["answer"][i]
+  text_with_prompt_template = prompt_template.format(question=question)
+  finetuning_dataset.append({"question": text_with_prompt_template, "answer": answer})
+
+from pprint import pprint
+print("One datapoint in the finetuning dataset:")
+pprint(finetuning_dataset[0])
+
+
+
+
+
+#tokenizing data
+def tokenize_function(examples):
+    if "question" in examples and "answer" in examples:
+      text = examples["question"][0] + examples["answer"][0]
+    elif "input" in examples and "output" in examples:
+      text = examples["input"][0] + examples["output"][0]
+    else:
+      text = examples["text"][0]
+
+    tokenizer.pad_token = tokenizer.eos_token
+    tokenized_inputs = tokenizer(
+        text,
+        return_tensors="np",
+        padding=True,
+    )
+
+    max_length = min(
+        tokenized_inputs["input_ids"].shape[1],
+        2048
+    )
+    tokenizer.truncation_side = "left"
+    tokenized_inputs = tokenizer(
+        text,
+        return_tensors="np",
+        truncation=True,
+        max_length=max_length
+    )
+
+    return tokenized_inputs
+
+tokenized_dataset = dataset_swiftie.map(
+    tokenize_function,
+    batched=True,
+    batch_size=1,
+    drop_last_batch=True
+)
+
+print(tokenized_dataset)
+
+
+
+#training
+
+
+
+import datasets
+import tempfile
+import logging
+import random
+import config
+import os
+import yaml
+import time
+import torch
+import transformers
+import pandas as pd
+import jsonlines
+
+from utilities import *
+from transformers import AutoTokenizer
+from transformers import AutoModelForCausalLM
+from transformers import TrainingArguments
+from transformers import AutoModelForCausalLM
+from llama import BasicModelRunner
+
+
+logger = logging.getLogger(__name__)
+global_config = None
+
+
+dataset_path = "lamini/taylor_swift"
+use_hf = True
+
+model_name = "EleutherAI/pythia-70m"
+
+training_config = {
+    "model": {
+        "pretrained_name": model_name,
+        "max_length" : 2048
+    },
+    "datasets": {
+        "use_hf": use_hf,
+        "path": dataset_path
+    },
+    "verbose": True
+}
+
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+tokenizer.pad_token = tokenizer.eos_token
+train_dataset, test_dataset = tokenize_and_split_data(training_config, tokenizer)
+
+print(train_dataset)
+print(test_dataset)
+
+
+
+
+base_model = AutoModelForCausalLM.from_pretrained(model_name)
+
+device_count = torch.cuda.device_count()
+if device_count > 0:
+    logger.debug("Select GPU device")
+    device = torch.device("cuda")
+else:
+    logger.debug("Select CPU device")
+    device = torch.device("cpu")
+    
+base_model.to(device)
+
+def inference(text, model, tokenizer, max_input_tokens=1000, max_output_tokens=500):
+  # Tokenize
+  input_ids = tokenizer.encode(
+          text,
+          return_tensors="pt",
+          truncation=True,
+          max_length=max_input_tokens
+  )
+
+  # Generate
+  device = model.device
+  generated_tokens_with_prompt = model.generate(
+    input_ids=input_ids.to(device),
+    max_length=max_output_tokens
+  )
+
+  # Decode
+  generated_text_with_prompt = tokenizer.batch_decode(generated_tokens_with_prompt, skip_special_tokens=True)
+
+  # Strip the prompt
+  generated_text_answer = generated_text_with_prompt[0][len(text):]
+
+  return generated_text_answer
+
+
+
+max_steps = 3
+trained_model_name = f"lamini_ts_{max_steps}_steps"
+output_dir = trained_model_name
+
+training_args = TrainingArguments(
+
+  # Learning rate
+  learning_rate=1.0e-5,
+
+  # Number of training epochs
+  num_train_epochs=1,
+
+  # Max steps to train for (each step is a batch of data)
+  # Overrides num_train_epochs, if not -1
+  max_steps=max_steps,
+
+  # Batch size for training
+  per_device_train_batch_size=1,
+
+  # Directory to save model checkpoints
+  output_dir=output_dir,
+
+  # Other arguments
+  overwrite_output_dir=False, # Overwrite the content of the output directory
+  disable_tqdm=False, # Disable progress bars
+  eval_steps=120, # Number of update steps between two evaluations
+  save_steps=120, # After # steps model is saved
+  warmup_steps=1, # Number of warmup steps for learning rate scheduler
+  per_device_eval_batch_size=1, # Batch size for evaluation
+  evaluation_strategy="steps",
+  logging_strategy="steps",
+  logging_steps=1,
+  optim="adafactor",
+  gradient_accumulation_steps = 4,
+  gradient_checkpointing=False,
+
+  # Parameters for early stopping
+  load_best_model_at_end=True,
+  save_total_limit=1,
+  metric_for_best_model="eval_loss",
+  greater_is_better=False
+)
+
+
+
+model_flops = (
+  base_model.floating_point_ops(
+    {
+       "input_ids": torch.zeros(
+           (1, training_config["model"]["max_length"])
+      )
+    }
+  )
+  * training_args.gradient_accumulation_steps
+)
+
+print(base_model)
+print("Memory footprint", base_model.get_memory_footprint() / 1e9, "GB")
+print("Flops", model_flops / 1e9, "GFLOPs")
+
+trainer = Trainer(
+    model=base_model,
+    model_flops=model_flops,
+    total_steps=max_steps,
+    args=training_args,
+    train_dataset=train_dataset,
+    eval_dataset=test_dataset,
+)
+
+training_output = trainer.train()
+
+
+
