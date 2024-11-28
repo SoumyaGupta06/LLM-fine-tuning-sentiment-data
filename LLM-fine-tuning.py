@@ -1,11 +1,40 @@
+import pandas as pd
+import datasets
+from pprint import pprint
+from transformers import AutoTokenizer
+from pprint import pprint
 
-# data preparation
+import datasets
+import tempfile
+import logging
+import random
+import config
+import os
+import yaml
+import time
+import torch
+import transformers
+import pandas as pd
+import jsonlines
+
+from utilities import *
+from transformers import AutoTokenizer
+from transformers import AutoModelForCausalLM
+from transformers import TrainingArguments
+from transformers import AutoModelForCausalLM
+from llama import BasicModelRunner
 
 import pandas as pd
 import datasets
 from pprint import pprint
 from transformers import AutoTokenizer
 from pprint import pprint
+from datasets import DatasetDict
+from collections import defaultdict
+from datasets import load_dataset
+
+
+# data preparation
 
 tokenizer = AutoTokenizer.from_pretrained("EleutherAI/pythia-70m")   
 
@@ -76,35 +105,6 @@ tokenized_dataset.save_to_disk('D:/Projects/tokenized_dataset')
 
  
 #training 
-
-import datasets
-import tempfile
-import logging
-import random
-import config
-import os
-import yaml
-import time
-import torch
-import transformers
-import pandas as pd
-import jsonlines
-
-from utilities import *
-from transformers import AutoTokenizer
-from transformers import AutoModelForCausalLM
-from transformers import TrainingArguments
-from transformers import AutoModelForCausalLM
-from llama import BasicModelRunner
-
-import pandas as pd
-import datasets
-from pprint import pprint
-from transformers import AutoTokenizer
-from pprint import pprint
-from datasets import DatasetDict
-from collections import defaultdict
-from datasets import load_dataset
 
 logger = logging.getLogger(__name__)
 global_config = None
