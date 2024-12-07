@@ -1,3 +1,4 @@
+
 import pandas as pd
 import datasets
 from pprint import pprint
@@ -50,7 +51,7 @@ prompt_template = """### Input:
 num_examples = len(data_train["text"])
 
 finetuning_dataset = []
-for i in range(100):
+for i in range(num_examples):
     inp = data_train["text"][i]
     opt = data_train["label_text"][i]
     text_with_prompt_template = prompt_template.format(inp=inp)
